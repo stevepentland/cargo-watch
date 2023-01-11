@@ -10,45 +10,47 @@ jobs:
   build:
     strategy:
       matrix:
-        name:
-          - linux-x86-64-gnu
-          - linux-x86-64-musl
-          - linux-armhf-gnu
-          - linux-arm64-gnu
-          - mac-x86-64
-          - mac-arm64
-          - windows-x86-64
-          - windows-arm64
         include:
           - name: linux-x86-64-gnu
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            cross: false
-            experimental: false
 
           - name: linux-x86-64-musl
             os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             cross: true
-            experimental: false
+            features: mimalloc
 
-          - name: linux-armhf-gnu
+          - name: linux-arm7hf-gnu
             os: ubuntu-latest
             target: armv7-unknown-linux-gnueabihf
             cross: true
-            experimental: false
+
+          - name: linux-arm7hf-musl
+            os: ubuntu-latest
+            target: armv7-unknown-linux-musleabihf
+            cross: true
 
           - name: linux-arm64-gnu
             os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             cross: true
-            experimental: false
+
+          - name: linux-arm64-musl
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            cross: true
+
+          - name: linux-riscv64-gnu
+            os: ubuntu-latest
+            target: riscv64gc-unknown-linux-gnu
+            cross: true
+            experimental: true
 
           - name: mac-x86-64
             os: macos-latest
             target: x86_64-apple-darwin
             cross: false
-            experimental: false
 
           - name: mac-arm64
             os: macos-11.0
@@ -59,18 +61,18 @@ jobs:
           - name: windows-x86-64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            cross: false
-            experimental: false
+            features: mimalloc
 
           - name: windows-arm64
             os: windows-latest
             target: aarch64-pc-windows-msvc
             cross: true
+            features: mimalloc
             experimental: true
 
     name: Binaries for ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental }}
+    continue-on-error: "${{ !!matrix.experimental }}"
 
     steps:
       - uses: actions/checkout@v2
@@ -79,17 +81,21 @@ jobs:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
 
-      - uses: actions/cache@v2
-        if: startsWith(matrix.name, 'linux-')
-        with:
-          path: ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-bin-${{ hashFiles('.github/workflows/release.yml') }}
       - name: Install cargo-deb
         if: startsWith(matrix.name, 'linux-')
-        run: which cargo-deb || cargo install cargo-deb --version 1.30.0 --locked
+        run: cargo install cargo-deb --version 1.35.0 --force
       - name: Install cargo-generate-rpm
         if: startsWith(matrix.name, 'linux-')
-        run: which cargo-generate-rpm || cargo install cargo-generate-rpm --version 0.5.0 --locked
+        run: cargo install cargo-generate-rpm --version 0.6.0 --force
+
+      - name: Add cross platform tools
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt install -y \
+            musl musl-dev musl-tools \
+            gcc-aarch64-linux-gnu \
+            gcc-riscv64-linux-gnu \
+            gcc-arm-linux-gnueabihf
 
       - uses: actions-rs/toolchain@v1
         with:
@@ -101,9 +107,9 @@ jobs:
       - uses: actions-rs/cargo@v1
         name: Build
         with:
-          use-cross: ${{ matrix.cross }}
+          use-cross: "${{ !!matrix.cross }}"
           command: build
-          args: --release --locked --target ${{ matrix.target }}
+          args: "--release --locked --target ${{ matrix.target }} --features '${{ matrix.features }}'"
 
       - name: Extract version
         shell: bash
@@ -126,7 +132,7 @@ jobs:
           ext=""
           [[ "${{ matrix.name }}" == windows-* ]] && ext=".exe"
           bin="target/${{ matrix.target }}/release/cargo-watch${ext}"
-          strip "$bin" || true
+          objcopy --compress-debug-sections "$bin" || strip "$bin" || true
 
           version=$(cat VERSION)
           dst="cargo-watch-v${version}-${{ matrix.target }}"
@@ -136,7 +142,7 @@ jobs:
           cp "$bin" "target/release/" # workaround for cargo-deb silliness with targets
 
           cp "$bin" "$dst/"
-          cp -r README.md LICENSE completions cargo-watch.1 "$dst/"
+          cp -r README.md USAGE.md TROUBLESHOOT.md LICENSE completions cargo-watch.1 "$dst/"
 
       - name: Archive (tar)
         if: '! startsWith(matrix.name, ''windows-'')'
@@ -145,7 +151,7 @@ jobs:
           set -euxo pipefail
           version=$(cat VERSION)
           dst="cargo-watch-v${version}-${{ matrix.target }}"
-          tar cavf "$dst.tar.xz" "$dst"
+          tar cavf "$dst.tzst" "$dst"
       - name: Archive (deb)
         if: startsWith(matrix.name, 'linux-')
         shell: bash
@@ -179,7 +185,7 @@ jobs:
           retention-days: 1
           path: |
             cargo-watch-v*.tar.xz
-            cargo-watch-v*.tar.zst
+            cargo-watch-v*.tzst
             cargo-watch-v*.deb
             cargo-watch-v*.rpm
             cargo-watch-v*.zip

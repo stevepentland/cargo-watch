@@ -1,0 +1,53 @@
+This first one tests that test-cw behaves correctly on a single run:
+
+```
+$ test-cw --
+> --quit-after-n 1 -S sh -s 'echo in; sleep 1; echo out'
+? 0
+[[Running `echo in; sleep 1; echo out`]]
+in
+out
+[[Command was successful]]
+[[--quit after n--]]
+
+```
+
+
+This one uses `--quit-after-n`. With `--restart`, we restart the command on
+event without waiting for it to stop, so we're looking for the second command
+to start in the middle of the first. We ignore the output after the second
+start because the order of the `ForceStop` message and the `in` message can
+vary. But we're looking for the `quit-after-n` signalling message afterwards to
+check that Cargo Watch stopped.
+
+```
+$ test-cw --touch File --touch Other --between 500 --
+> --restart --quit-after-n 2 --postpone -S sh -s 'echo in; sleep 1; echo out'
+? 0
+[[Running `echo in; sleep 1; echo out`]]
+in
+[[Running `echo in; sleep 1; echo out`]]
+...
+[[--quit after n--]]
+
+```
+
+
+This one doesn't use `--quit-after-n`, and instead relies on test-cw to time
+out Cargo Watch. As such, it's similar to the above except that we look for the
+last "success" message from Cargo Watch, and then the expected timeout
+signalling from the tester.
+
+```
+$ test-cw --touch File --touch Other --between 500 --expect-timeout --
+> --restart --postpone -S sh -s 'echo in; sleep 1; echo out'
+? 0
+[[Running `echo in; sleep 1; echo out`]]
+in
+[[Running `echo in; sleep 1; echo out`]]
+...
+[[Command was successful]]
+{~expected timeout~}
+
+```
+
